@@ -57,7 +57,8 @@ $ThemeUrls     = @(
     'https://raw.githubusercontent.com/Beseco/windows-skripte/main/konsole/paradox.omp.json',
     'https://raw.githubusercontent.com/JanDeDobbeleer/oh-my-posh/main/themes/paradox.omp.json'
 )
-$SessionTemplate = ' {{ .UserName }}@{{ .HostName }} '
+$ExeUrl        = 'https://raw.githubusercontent.com/Beseco/windows-skripte/main/konsole/bin/oh-my-posh.exe'
+$SessionTemplate =' {{ .UserName }}@{{ .HostName }} '
 $InitZeile     = 'oh-my-posh init pwsh --config "$HOME\.config\oh-my-posh\paradox.omp.json" | Invoke-Expression'
 $SchriftName   = 'MesloLGM Nerd Font'
 $Zeitstempel   = Get-Date -Format 'yyyyMMdd-HHmmss'
@@ -216,19 +217,74 @@ function Install-OhMyPosh {
     if (-not $omp) {
         if ($winget) { Write-Warnung 'winget-Installation ohne Erfolg - versuche offizielles Installationsskript.' }
         else { Write-Info 'winget nicht vorhanden - nutze offizielles Installationsskript (ohmyposh.dev).' }
-        $skript = (New-Object System.Net.WebClient).DownloadString('https://ohmyposh.dev/install.ps1')
-        # Eigener Bereich: StrictMode/ErrorAction dieses Skripts duerfen das fremde Skript nicht treffen
-        # (es fragt z. B. $IsMacOS ab, das es unter 5.1 nicht gibt)
-        & {
-            Set-StrictMode -Off
-            $ErrorActionPreference = 'Continue'
-            Invoke-Expression $skript
+        try {
+            $skript = (New-Object System.Net.WebClient).DownloadString('https://ohmyposh.dev/install.ps1')
+            # Eigener Bereich: StrictMode/ErrorAction dieses Skripts duerfen das fremde Skript nicht treffen
+            # (es fragt z. B. $IsMacOS ab, das es unter 5.1 nicht gibt)
+            & {
+                Set-StrictMode -Off
+                $ErrorActionPreference = 'Continue'
+                Invoke-Expression $skript
+            }
+        } catch {
+            Write-Warnung "Offizielles Installationsskript fehlgeschlagen: $($_.Exception.Message)"
         }
         Initialize-SitzungsPfad
         $omp = Get-OhMyPosh
     }
+    if (-not $omp) {
+        Write-Warnung 'Nutze die mitgelieferte oh-my-posh.exe aus dem Repo.'
+        $omp = Install-OhMyPoshExe
+    }
     if (-not $omp) { throw 'Oh My Posh konnte nicht installiert werden.' }
     Write-Ok "installiert: $omp"
+}
+
+function Install-OhMyPoshExe {
+    # Dritte Rueckfallebene: eigenstaendige exe aus diesem Repo (konsole\bin) nach
+    # %LOCALAPPDATA%\Programs\oh-my-posh\bin kopieren und in den Benutzer-PATH eintragen.
+    # Nur mit gueltiger Signatur von Jan De Dobbeleer.
+    $zielOrdner = Join-Path $env:LOCALAPPDATA 'Programs\oh-my-posh\bin'
+    $ziel = Join-Path $zielOrdner 'oh-my-posh.exe'
+    if (-not (Test-Path $zielOrdner)) { New-Item -ItemType Directory -Path $zielOrdner -Force | Out-Null }
+
+    $tmp = Join-Path $env:TEMP ("oh-my-posh-{0}.exe" -f [Guid]::NewGuid().ToString('N'))
+    try {
+        $lokal = if ($PSScriptRoot) { Join-Path $PSScriptRoot 'bin\oh-my-posh.exe' } else { $null }
+        if ($lokal -and (Test-Path $lokal)) {
+            Write-Info "Quelle: $lokal"
+            Copy-Item -LiteralPath $lokal -Destination $tmp -Force
+        } else {
+            Write-Info "Quelle: $ExeUrl"
+            try { (New-Object System.Net.WebClient).DownloadFile($ExeUrl, $tmp) }
+            catch { Write-Warnung "Download fehlgeschlagen: $($_.Exception.Message)"; return $null }
+        }
+
+        $sig = Get-AuthenticodeSignature -FilePath $tmp
+        if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'De Dobbeleer') {
+            Write-Warnung "Signatur ungueltig ($($sig.Status)) - exe wird nicht verwendet."
+            return $null
+        }
+        Move-Item -LiteralPath $tmp -Destination $ziel -Force
+    } finally {
+        if (Test-Path $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+    }
+
+    # Benutzer-PATH dauerhaft ergaenzen (Rohwert lesen, damit %VARIABLEN% erhalten bleiben)
+    $envKey = Get-Item -Path 'HKCU:\Environment'
+    $roh = [string]$envKey.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+    $eintraege = @($roh -split ';' | Where-Object { $_ })
+    $vorhanden = $eintraege | Where-Object { [Environment]::ExpandEnvironmentVariables($_).TrimEnd('\') -ieq $zielOrdner.TrimEnd('\') }
+    if (-not $vorhanden) {
+        $neu = (@($eintraege) + $zielOrdner) -join ';'
+        Set-ItemProperty -Path 'HKCU:\Environment' -Name Path -Value $neu -Type ExpandString
+        # Explorer/neue Fenster benachrichtigen (SetEnvironmentVariable sendet WM_SETTINGCHANGE)
+        [Environment]::SetEnvironmentVariable('HPD_PFAD_AKTUALISIERT', '1', 'User')
+        [Environment]::SetEnvironmentVariable('HPD_PFAD_AKTUALISIERT', $null, 'User')
+        Write-Info "Benutzer-PATH ergaenzt: $zielOrdner"
+    }
+    Initialize-SitzungsPfad
+    return (Get-OhMyPosh)
 }
 
 # ---------------------------------------------------------------- 3. Nerd Font

@@ -42,8 +42,12 @@ Danach eine **neue Konsole öffnen** bzw. die SSH-Verbindung neu aufbauen.
 
 1. **Execution Policy** `CurrentUser` → `RemoteSigned`, getrennt für 5.1 und 7, falls nötig.
 2. **Oh My Posh** per `winget install JanDeDobbeleer.OhMyPosh` installieren, falls es fehlt.
-   Ohne winget (z. B. auf älteren Servern) wird das offizielle Installationsskript von
-   ohmyposh.dev genutzt. Danach wird der `PATH` der laufenden Sitzung aktualisiert.
+   Ohne winget (z. B. auf älteren Servern) oder wenn winget scheitert, wird das offizielle
+   Installationsskript von ohmyposh.dev genutzt. Klappt auch das nicht (etwa weil Downloads
+   von GitHub-Releases gesperrt sind), wird die mitgelieferte `konsole/bin/oh-my-posh.exe`
+   nach `%LOCALAPPDATA%\Programs\oh-my-posh\bin` kopiert und in den Benutzer-`PATH`
+   eingetragen. Das geschieht nur, wenn ihre Signatur gültig ist (Jan De Dobbeleer).
+   Danach wird der `PATH` der laufenden Sitzung aktualisiert.
 3. **Nerd Font** `MesloLGM Nerd Font` installieren (`oh-my-posh font install meslo`).
 4. **Theme** `paradox.omp.json` aus diesem Repo nach `$HOME\.config\oh-my-posh\` kopieren.
    Das Session-Segment zeigt ` {{ .UserName }}@{{ .HostName }} `. Wird das Skript ohne Repo
@@ -82,6 +86,15 @@ Den Prompt zeichnet bei einer SSH-Verbindung der **entfernte** Rechner. Das Skri
 auf jedem Server laufen, auf den man sich verbindet (dort am besten mit `-OhneSchrift`).
 Die Nerd Font braucht dagegen nur der **Client**, also der Rechner, auf dem das Terminal
 läuft.
+
+### Mitgelieferte oh-my-posh.exe
+
+`konsole/bin/oh-my-posh.exe` ist `posh-windows-amd64.exe` aus dem offiziellen
+Oh-My-Posh-Release **v32.0.0** (SHA-256
+`d34b1866860ca82b9349f0321aedcf40b5ad7edecd569d7c8d05c24512a4411c`), unverändert und unter
+MIT-Lizenz (`konsole/bin/LICENSE-oh-my-posh.txt`). Sie dient nur als Rückfallebene.
+Rechner, die so installiert wurden, aktualisieren sich nicht automatisch: Für eine neue
+Version die Datei aus dem Release ersetzen und diesen Abschnitt anpassen.
 
 ### Fehlerbehebung
 
