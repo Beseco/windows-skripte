@@ -161,13 +161,35 @@ function Set-Ausfuehrungsrichtlinie {
         Write-Info "$name nicht installiert - uebersprungen"
         return
     }
-    $wert = (& $andere -NoProfile -NonInteractive -Command 'Get-ExecutionPolicy -Scope CurrentUser' 2>$null | Select-Object -Last 1)
-    if ($erlaubt -contains "$wert".Trim()) {
-        Write-Ok "${name}: bereits $("$wert".Trim())"
+    $abfrage = 'Get-ExecutionPolicy -Scope CurrentUser'
+    $wert = Invoke-AnderePowerShell -Exe $andere -Befehl $abfrage
+    if ($erlaubt -contains $wert) {
+        Write-Ok "${name}: bereits $wert"
     } elseif ($PSCmdlet.ShouldProcess("$name CurrentUser", 'Execution Policy RemoteSigned')) {
-        & $andere -NoProfile -NonInteractive -Command 'try { Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned -Force -ErrorAction Stop } catch { if ($_.FullyQualifiedErrorId -notlike "*ExecutionPolicyOverride*") { throw } }' 2>$null
-        Write-Ok "${name}: RemoteSigned gesetzt"
+        $null = Invoke-AnderePowerShell -Exe $andere -Befehl 'Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned -Force -ErrorAction SilentlyContinue'
+        $wert = Invoke-AnderePowerShell -Exe $andere -Befehl $abfrage
+        if ($erlaubt -contains $wert) { Write-Ok "${name}: RemoteSigned gesetzt" }
+        else { Write-Warnung "${name}: konnte nicht gesetzt werden (aktuell: $wert)" }
     }
+}
+
+function Invoke-AnderePowerShell {
+    # Startet die jeweils andere PowerShell. -EncodedCommand umgeht die Anfuehrungszeichen-Probleme
+    # beim Uebergeben von Argumenten an native Programme unter 5.1; Fehlerausgaben brechen nicht ab.
+    param([string]$Exe, [string]$Befehl)
+    $kodiert = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($Befehl))
+    $altEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $ausgabe = & $Exe -NoProfile -NonInteractive -OutputFormat Text -EncodedCommand $kodiert 2>&1 |
+            Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] } |
+            ForEach-Object { "$_".Trim() } | Where-Object { $_ }
+    } catch {
+        $ausgabe = @()
+    } finally {
+        $ErrorActionPreference = $altEap
+    }
+    return "$(@($ausgabe) | Select-Object -Last 1)"
 }
 
 # ---------------------------------------------------------------- 2. Oh My Posh
