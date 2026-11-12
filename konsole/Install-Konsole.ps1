@@ -217,7 +217,13 @@ function Install-OhMyPosh {
         if ($winget) { Write-Warnung 'winget-Installation ohne Erfolg - versuche offizielles Installationsskript.' }
         else { Write-Info 'winget nicht vorhanden - nutze offizielles Installationsskript (ohmyposh.dev).' }
         $skript = (New-Object System.Net.WebClient).DownloadString('https://ohmyposh.dev/install.ps1')
-        Invoke-Expression $skript
+        # Eigener Bereich: StrictMode/ErrorAction dieses Skripts duerfen das fremde Skript nicht treffen
+        # (es fragt z. B. $IsMacOS ab, das es unter 5.1 nicht gibt)
+        & {
+            Set-StrictMode -Off
+            $ErrorActionPreference = 'Continue'
+            Invoke-Expression $skript
+        }
         Initialize-SitzungsPfad
         $omp = Get-OhMyPosh
     }
