@@ -19,10 +19,11 @@ In einer PowerShell-Konsole (für `-SshStandardShell` als Administrator):
 irm https://raw.githubusercontent.com/Beseco/windows-skripte/main/konsole/Install-Konsole.ps1 | iex
 ```
 
-Mit Schaltern, z. B. auf einem Server ohne Schrift und mit PowerShell 7 als SSH-Shell:
+Mit Schaltern, z. B. auf einem Server ohne Schrift, mit PowerShell 7 (ohne Rückfrage) und
+PowerShell 7 als SSH-Shell (als Administrator):
 
 ```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Beseco/windows-skripte/main/konsole/Install-Konsole.ps1))) -OhneSchrift -SshStandardShell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/Beseco/windows-skripte/main/konsole/Install-Konsole.ps1))) -OhneSchrift -PowerShell7 -SshStandardShell
 ```
 
 Falls die Execution Policy noch auf `Restricted` steht, funktioniert `irm | iex`
@@ -40,6 +41,15 @@ Danach eine **neue Konsole öffnen** bzw. die SSH-Verbindung neu aufbauen.
 
 ### Was das Skript macht
 
+0. **PowerShell 7 prüfen**: Fehlt es oder ist es veraltet, fragt das Skript gleich am Anfang,
+   ob es installiert bzw. aktualisiert werden soll. Die Antwort ist standardmäßig „Ja“.
+   - **Als Administrator**: neueste **LTS-Version** per MSI. Sie wird für alle Benutzer nach
+     `C:\Program Files\PowerShell\7` installiert, ist als SSH-Shell nutzbar und wird über
+     Microsoft Update aktualisiert. Ab 7.7 gibt es kein MSI mehr, deshalb die LTS-Version.
+   - **Ohne Administratorrechte**: neueste stabile Version per `winget` als MSIX-Paket, nur
+     für den aktuellen Benutzer.
+   - Die MSI-Datei wird nur ausgeführt, wenn sie gültig von Microsoft signiert ist. Scheitert
+     der Download, wird `winget` versucht.
 1. **Execution Policy** `CurrentUser` → `RemoteSigned`, getrennt für 5.1 und 7, falls nötig.
 2. **Oh My Posh** per `winget install JanDeDobbeleer.OhMyPosh` installieren, falls es fehlt.
    Ohne winget (z. B. auf älteren Servern) oder wenn winget scheitert, wird das offizielle
@@ -78,6 +88,8 @@ Jede Datei, die das Skript ändert (Profil, Theme, Terminal-`settings.json`), wi
 | `-OhneSchrift`         | Keine Nerd-Font-Installation. Auf Servern, die man nur per SSH nutzt, ist sie unnötig.    |
 | `-OhneTerminalSchrift` | Die Schrift in Windows Terminal bleibt unverändert.                                      |
 | `-SshStandardShell`    | PowerShell 7 wird Standard-Shell für OpenSSH (nur als Admin, nur mit installiertem pwsh). |
+| `-PowerShell7`         | PowerShell 7 ohne Rückfrage installieren bzw. aktualisieren.                              |
+| `-OhnePowerShell7`     | PowerShell 7 weder prüfen noch nachfragen.                                               |
 | `-WhatIf`              | Trockenlauf: zeigt, was geändert würde, ändert aber nichts.                              |
 
 ### Hinweis zu SSH

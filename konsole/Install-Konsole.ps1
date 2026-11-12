@@ -3,6 +3,7 @@
     Richtet die PowerShell-Konsole mit Oh My Posh ein (Windows PowerShell 5.1 und PowerShell 7).
 
 .DESCRIPTION
+    - PowerShell 7 pruefen: fehlt es oder ist es veraltet, wird gefragt, ob es installiert/aktualisiert werden soll
     - Execution Policy CurrentUser -> RemoteSigned (fuer 5.1 und 7)
     - Oh My Posh installieren (winget, sonst offizielles Installationsskript)
     - Nerd Font "Meslo" installieren (abschaltbar mit -OhneSchrift)
@@ -25,6 +26,12 @@
     Setzt HKLM:\SOFTWARE\OpenSSH\DefaultShell auf pwsh.exe (nur als Administrator,
     nur wenn PowerShell 7 installiert ist).
 
+.PARAMETER PowerShell7
+    PowerShell 7 ohne Rueckfrage installieren bzw. aktualisieren, wenn es fehlt oder veraltet ist.
+
+.PARAMETER OhnePowerShell7
+    PowerShell 7 weder pruefen noch nachfragen.
+
 .EXAMPLE
     .\Install-Konsole.ps1
 
@@ -42,6 +49,8 @@ param(
     [switch]$OhneSchrift,
     [switch]$OhneTerminalSchrift,
     [switch]$SshStandardShell,
+    [switch]$PowerShell7,
+    [switch]$OhnePowerShell7,
     # Nur fuer Tests: anderer Dokumente-Ordner fuer die Profile
     [Parameter(DontShow)]
     [string]$DokumentePfad
@@ -99,10 +108,11 @@ function Get-OhMyPosh {
 }
 
 function Get-Pwsh {
-    $cmd = Get-Command pwsh -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($cmd) { return $cmd.Source }
+    # Maschinenweite Installation (MSI, Program Files) bevorzugen, sonst was im PATH liegt (z. B. MSIX/Store)
     $std = Join-Path $env:ProgramFiles 'PowerShell\7\pwsh.exe'
     if (Test-Path $std) { return $std }
+    $cmd = Get-Command pwsh -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($cmd) { return $cmd.Source }
     return $null
 }
 
@@ -124,6 +134,138 @@ function Test-NerdFont {
         if ($props -and ($props.PSObject.Properties.Name -match "^$([regex]::Escape($SchriftName)) ")) { return $true }
     }
     return $false
+}
+
+# ---------------------------------------------------------------- 0. PowerShell 7
+
+function Get-Pwsh7Version {
+    # Installierte PowerShell-7-Version oder $null
+    if ($PSVersionTable.PSVersion.Major -ge 7) {
+        return [version]('{0}.{1}.{2}' -f $PSVersionTable.PSVersion.Major, $PSVersionTable.PSVersion.Minor, $PSVersionTable.PSVersion.Patch)
+    }
+    $pwsh = Get-Pwsh
+    if (-not $pwsh) { return $null }
+    $text = Invoke-AnderePowerShell -Exe $pwsh -Befehl '$v = $PSVersionTable.PSVersion; "{0}.{1}.{2}" -f $v.Major, $v.Minor, $v.Patch'
+    if ($text -match '^\d+\.\d+\.\d+$') { return [version]$text }
+    return $null
+}
+
+function Get-Pwsh7Aktuell([ValidateSet('stable', 'lts')][string]$Kanal) {
+    # Aktuelle Version des Kanals: zuerst Microsoft (aka.ms), fuer 'stable' ersatzweise GitHub-API
+    try {
+        $info = Invoke-RestMethod -Uri "https://aka.ms/pwsh-buildinfo-$Kanal" -UseBasicParsing -TimeoutSec 15
+        if ("$($info.ReleaseTag)" -match '^v?(\d+\.\d+\.\d+)$') { return [version]$Matches[1] }
+    } catch { Write-Verbose "aka.ms nicht erreichbar: $($_.Exception.Message)" }
+    if ($Kanal -eq 'stable') {
+        try {
+            $rel = Invoke-RestMethod -Uri 'https://api.github.com/repos/PowerShell/PowerShell/releases/latest' -UseBasicParsing -TimeoutSec 15
+            if ("$($rel.tag_name)" -match '^v?(\d+\.\d+\.\d+)$') { return [version]$Matches[1] }
+        } catch { Write-Verbose "GitHub-API nicht erreichbar: $($_.Exception.Message)" }
+    }
+    return $null
+}
+
+function Read-JaNein([string]$Frage) {
+    # $true bei Ja (Standard), $false bei Nein oder wenn keine Eingabe moeglich ist (z. B. -NonInteractive)
+    try {
+        $antwort = Read-Host "    $Frage [J/n]"
+    } catch {
+        Write-Info 'Keine Eingabe moeglich - uebersprungen (mit -PowerShell7 ohne Rueckfrage installieren).'
+        return $false
+    }
+    return ("$antwort".Trim() -eq '' -or "$antwort".Trim() -match '^(j|ja|y|yes)$')
+}
+
+function Install-Pwsh7Msi([version]$Version) {
+    # Maschinenweite Installation/Aktualisierung per MSI aus dem offiziellen Release (nur mit Microsoft-Signatur)
+    $arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+    $arch = switch ($arch) { 'ARM64' { 'arm64' } 'x86' { 'x86' } default { 'x64' } }
+    $name = "PowerShell-$Version-win-$arch.msi"
+    $url = "https://github.com/PowerShell/PowerShell/releases/download/v$Version/$name"
+    $msi = Join-Path $env:TEMP $name
+    try {
+        Write-Info "Lade $url ..."
+        try { (New-Object System.Net.WebClient).DownloadFile($url, $msi) }
+        catch { Write-Warnung "Download fehlgeschlagen: $($_.Exception.Message)"; return $false }
+
+        $sig = Get-AuthenticodeSignature -FilePath $msi
+        if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') {
+            Write-Warnung "Signatur ungueltig ($($sig.Status)) - MSI wird nicht ausgefuehrt."
+            return $false
+        }
+        Write-Info 'Installiere (msiexec, still) ...'
+        $argumente = @('/i', "`"$msi`"", '/quiet', '/norestart', 'ADD_PATH=1', 'USE_MU=1', 'ENABLE_MU=1')
+        $proc = Start-Process -FilePath 'msiexec.exe' -ArgumentList $argumente -Wait -PassThru
+        switch ($proc.ExitCode) {
+            0       { return $true }
+            3010    { Write-Warnung 'Installiert - ein Neustart des Rechners ist noetig.'; return $true }
+            1641    { Write-Warnung 'Installiert - Neustart wurde eingeleitet.'; return $true }
+            default { Write-Warnung "msiexec beendet mit Code $($proc.ExitCode)."; return $false }
+        }
+    } finally {
+        if (Test-Path $msi) { Remove-Item -LiteralPath $msi -Force -ErrorAction SilentlyContinue }
+    }
+}
+
+function Install-Pwsh7Winget([bool]$Vorhanden) {
+    $winget = Get-Command winget -ErrorAction SilentlyContinue
+    if (-not $winget) { Write-Warnung 'winget nicht vorhanden.'; return $false }
+    $aktion = if ($Vorhanden) { 'upgrade' } else { 'install' }
+    Write-Info "winget $aktion Microsoft.PowerShell ..."
+    & $winget.Source $aktion --id Microsoft.PowerShell -e --source winget --silent --accept-source-agreements --accept-package-agreements
+    return ($LASTEXITCODE -eq 0)
+}
+
+function Update-PowerShell7 {
+    [CmdletBinding(SupportsShouldProcess)]
+    param()
+    Write-Schritt 'PowerShell 7'
+
+    if ($OhnePowerShell7) { Write-Info 'uebersprungen (-OhnePowerShell7)'; return }
+
+    # Ab 7.7 liefert Microsoft kein MSI mehr, nur noch MSIX (pro Benutzer, nicht in Program Files).
+    # Als Admin daher die neueste LTS-Version per MSI: fuer alle Benutzer, als SSH-Shell nutzbar,
+    # Updates ueber Microsoft Update. Ohne Admin: neueste stabile Version per winget (MSIX).
+    $admin = Test-Admin
+    $installiert = Get-Pwsh7Version
+    $aktuell = $null
+    $perMsi = $false
+    if ($admin) {
+        $aktuell = Get-Pwsh7Aktuell lts
+        $perMsi = [bool]$aktuell
+    }
+    if (-not $aktuell) { $aktuell = Get-Pwsh7Aktuell stable }
+    if (-not $aktuell) {
+        if ($installiert) { Write-Ok "installiert: $installiert (aktuelle Version nicht ermittelbar)" }
+        else { Write-Warnung 'nicht installiert; aktuelle Version nicht ermittelbar (kein Internet?) - uebersprungen' }
+        return
+    }
+    $art = if ($perMsi) { 'LTS, fuer alle Benutzer' } else { 'fuer diesen Benutzer' }
+    if ($installiert -and $installiert -ge $aktuell) { Write-Ok "aktuell: $installiert"; return }
+
+    if ($installiert) { $text = "PowerShell $installiert ist installiert, aktuell ist $aktuell ($art)." ; $frage = "Auf $aktuell aktualisieren?" }
+    else { $text = "PowerShell 7 ist nicht installiert (aktuell: $aktuell, $art)."; $frage = "PowerShell $aktuell installieren?" }
+    Write-Info $text
+
+    if ($WhatIfPreference) {
+        $null = $PSCmdlet.ShouldProcess("PowerShell $aktuell", 'Installieren/Aktualisieren')
+        return
+    }
+    if (-not $PowerShell7 -and -not (Read-JaNein $frage)) { Write-Info 'nicht installiert'; return }
+    if ($PSVersionTable.PSVersion.Major -ge 7) {
+        Write-Warnung 'Dieses Skript laeuft selbst in PowerShell 7 - das Update kann einen Neustart der Konsole oder des Rechners verlangen.'
+    }
+
+    $ok = $false
+    if ($perMsi) { $ok = Install-Pwsh7Msi $aktuell }
+    elseif (-not $admin) { Write-Info 'Ohne Administratorrechte: Installation fuer den aktuellen Benutzer ueber winget.' }
+    if (-not $ok) { $ok = Install-Pwsh7Winget ([bool]$installiert) }
+
+    Initialize-SitzungsPfad
+    $neu = Get-Pwsh7Version
+    if ($neu -and $neu -ge $aktuell) { Write-Ok "PowerShell $neu installiert: $(Get-Pwsh)" }
+    elseif ($neu) { Write-Warnung "Installiert ist weiterhin $neu - Installation fehlgeschlagen oder Neustart noetig." }
+    else { Write-Warnung 'PowerShell 7 konnte nicht installiert werden (Internet/Proxy? Als Administrator versuchen).' }
 }
 
 # ---------------------------------------------------------------- 1. Execution Policy
@@ -478,6 +620,10 @@ function Set-SshStandardShell {
     if (-not (Test-Admin)) { Write-Warnung 'nur als Administrator moeglich - uebersprungen'; return }
     $pwsh = Get-Pwsh
     if (-not $pwsh) { Write-Warnung 'PowerShell 7 (pwsh.exe) nicht installiert - uebersprungen'; return }
+    if ($pwsh -like '*\WindowsApps\*') {
+        Write-Warnung "PowerShell 7 ist nur fuer diesen Benutzer installiert ($pwsh) - als SSH-Shell ungeeignet. Skript als Administrator mit -PowerShell7 ausfuehren (MSI-Installation)."
+        return
+    }
 
     $key = 'HKLM:\SOFTWARE\OpenSSH'
     $aktuell = (Get-ItemProperty -Path $key -Name DefaultShell -ErrorAction SilentlyContinue).DefaultShell
@@ -509,6 +655,7 @@ Write-Host "Konsole einrichten: $env:USERNAME@$env:COMPUTERNAME (PowerShell $($P
 if ($WhatIfPreference) { Write-Host '(Trockenlauf: -WhatIf, es wird nichts geaendert)' -ForegroundColor Yellow }
 
 Initialize-SitzungsPfad
+Update-PowerShell7
 Set-Ausfuehrungsrichtlinie
 Install-OhMyPosh
 Install-NerdFont
