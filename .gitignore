@@ -1,0 +1,10 @@
+# Sicherungen, die die Skripte anlegen
+*.bak-*
+*.bak
+
+# Editor / System
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+*.log
